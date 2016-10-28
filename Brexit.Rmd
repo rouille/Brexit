@@ -1,0 +1,262 @@
+---
+title: "Breaking Down Brexit"
+author: "Benjamin Rouillé d'Orfeuil"
+date: "June 2016"
+output: 
+  html_document:
+    keep_md: true
+---
+
+This past June, the United Kingdom had a referendum to decide wheter they want to *remain* or *leave* the European Union (EU). As a French citizen and a ardent member of the EU, I was interested by the outcome of the vote. Also, I have close family who reside and work in England, and the result will affect their lives.
+
+
+For this analysis, the necessary libaries are loaded.  
+```{r Libraries, message = FALSE, warning = FALSE}
+library("knitr")
+library("googleVis")
+library("rgdal")
+library("maptools")
+library("dplyr")
+library("ggplot2")
+library("ggmap")
+library("scales")
+library("httr")
+library("XML")
+library("RColorBrewer")
+library("grDevices")
+```
+
+```{r Set Options, echo = FALSE}
+opts_chunk$set(echo = TRUE)
+knit_hooks$set(inline = function(x) {prettyNum(x, big.mark = ",", digits = 2)} )
+op <- options(gvis.plot.tag = 'chart')
+```
+
+## Data
+The results of the vote have been downloaded from [The Electoral Commission](http://www.electoralcommission.org.uk)'s website. The commission is an independent elections watchdog and regulator of party and election finance that has been set up by the UK Parliament. The file contains the EU referendum results for all 326 English disctricts, the 22 principal areas of Wales, the 32 unitary authorities of Scotland, Northern Ireland and Gibraltar. In sum, there are 382 local areas declared.
+```{r Data, prompt = FALSE}
+fileName <- "~/DataScience/Brexit/EU-referendum-result-data.csv"
+data <- read.csv(fileName, header = TRUE)
+data$Area <- gsub("St\\.", "St", data$Area)
+```
+
+
+## Final Result
+```{r Final Results, results = 'asis', tidy = FALSE}
+final <- with(data, 
+              data.frame(choice = c("Remain","Leave"), 
+                         vote   = c(sum(Remain),sum(Leave) ), 
+                         pct    = c(sum(Remain)/sum(Valid_Votes),sum(Leave)/sum(Valid_Votes) ) ) )
+
+pie.final <- gvisPieChart(final, options = list(width = 500, height = 500, 
+                                                title = "EU Referendum Result", 
+                                                legend = "none", 
+                                                pieSliceText = "label") )
+plot(pie.final)
+```
+* Number of local areas declared: `r nrow(data)`
+* Total (Eligible) Electorate: `r sum(data$Electorate)`
+* Turnout: `r format(100*sum(data$VerifiedBallotPapers)/sum(data$Electorate), digits = 3)`%
+* Rejected Ballots: `r sum(data$Rejected_Ballots)`
+
+
+## Results by Countries of the United Kingdom
+```{r Results by Country, results = 'asis', tidy = FALSE}
+country <- with(data,
+                data.frame(Country = c("England","Scotland","Wales","Northern Ireland"),
+                           Remain = 100*c(sum(Remain[grep("E",Region_Code)])
+                                          /sum(Valid_Votes[grep("E",Region_Code)]),
+                                          sum(Remain[grep("S",Region_Code)])
+                                          /sum(Valid_Votes[grep("S",Region_Code)]),
+                                          sum(Remain[grep("W",Region_Code)])
+                                          /sum(Valid_Votes[grep("W",Region_Code)]),
+                                          sum(Remain[grep("N",Region_Code)])
+                                          /sum(Valid_Votes[grep("N",Region_Code)]) ),
+                           Leave =  100*c(sum(Leave[grep("E",Region_Code)])
+                                          /sum(Valid_Votes[grep("E",Region_Code)]),
+                                          sum(Leave[grep("S",Region_Code)])
+                                          /sum(Valid_Votes[grep("S",Region_Code)]),
+                                          sum(Leave[grep("W",Region_Code)])
+                                          /sum(Valid_Votes[grep("W",Region_Code)]),
+                                          sum(Leave[grep("N",Region_Code)])
+                                          /sum(Valid_Votes[grep("N",Region_Code)]) ) ) )
+
+bar.country <- gvisColumnChart(country, xvar = "Country", yvar = c("Remain","Leave"),
+                               options = list(legend = "none", 
+                                              axisTitlesPosition = "in",
+                                              vAxes = "[{title:'%'}]") )
+plot(bar.country)
+
+map.country <- gvisGeoChart(country, locationvar = "Country", colorvar = "Leave",
+                            options = list(region = "GB", 
+                                           displayMode = "regions", 
+                                           resolution = "provinces", 
+                                           colorAxis = "{colors:['blue','red']}") )
+
+plot(map.country)
+```
+We can see that Northern Ireland and Scotland voted *remain* while England and Wales voted *Leave*.
+
+
+
+## Complete Breakdown of the Results
+```{r Complete Breakdown, results = 'asis'}
+area <- with(data, data.frame(Area   = sort(Area), 
+                              Remain = 100*Remain[order(Area)]/Valid_Votes[order(Area)], 
+                              Leave  = 100*Leave[order(Area)]/Valid_Votes[order(Area)]) )
+
+bar.area <- gvisBarChart(area, xvar = "Area", yvar = c("Remain","Leave"), 
+                         options = list(legend = "none",
+                                        isStacked = "percent",
+                                        vAxes = "[{textStyle:{fontSize: '16'}}]",
+                                        chartArea = "{left:250,top:10,bottom:10}",
+                                        width= 800, height = 10000) )
+plot(bar.area)
+```
+
+
+## Map of Results by Administrative Area
+I use the [Global Administrative Areas](http://www.gadm.org/) (GADM) spatial database to obtain the location of the administrative areas of the UK. 
+```{r GADM, results = 'asis', message = FALSE, warning = FALSE}
+uk.map <- readOGR(dsn = "GBR_adm_shp", layer = "GBR_adm2", verbose = FALSE)
+uk.map@data$NAME_2 <- as.character(uk.map@data$NAME_2)
+```
+
+There are a couple of issues associated with the file provided by the GADM. First, the name of some of the administrative areas in the file are either incomplete or misspelled. I fix these entries below. 
+```{r GADM Cleaning, results = 'asis', message = FALSE, warning = FALSE}
+uk.map@data$NAME_2[56]  <- "City of London"
+uk.map@data$NAME_2[140] <- "Aberdeen City"
+uk.map@data$NAME_2[145] <- "Dundee City"
+uk.map@data$NAME_2[150] <- "City of Edinburgh"
+uk.map@data$NAME_2[154] <- "Glasgow City"
+uk.map@data$NAME_2[159] <- "North Ayrshire"
+uk.map@data$NAME_2[162] <- "Perth and Kinross"
+uk.map@data$NAME_2[171] <- "Isle of Anglesey"
+uk.map@data$NAME_2[188] <- "Rhondda Cynon Taf"
+```
+
+Then, 192 adminstrative areas are given for England by GADM. The term administrative area includes both districts and ceremonial counties, which are larger subdivisions of England than districts. I extract from Wikipedia a list of English districts along with a list of ceremonial counties to which they belong.
+```{r List of English Districts, results = 'asis', prompt = FALSE}
+url <- "https://en.wikipedia.org/wiki/List_of_English_districts"
+tables <- GET(url)
+tables <- readHTMLTable(rawToChar(tables$content) )
+n.rows <- unlist(lapply(tables, function(t) dim(t)[1]) )
+
+districts <- tables[[which.max(n.rows)]]
+names(districts) <- c("Name", "Website", "Population2015", "Type", "CeremonialCounty")
+districts$Name <- gsub("&", "and", districts$Name)
+districts$Name[133] <- "Kingston upon Hull"
+districts$id     <- NA
+districts$Leave  <- 0
+districts$Remain <- 0
+districts$Valid  <- 0
+```
+
+Employing the English ceremonial county/district information from Wikipedia, I can now cross-correlate the election data from the Electoral Commission to the 192 GADM administrative areas.
+```{r Match Information for England, results = 'asis', message = FALSE, warning = FALSE}
+wEngland <- which(uk.map@data$NAME_1 == "England")
+for(i in wEngland ) {
+    if(uk.map$TYPE_2[i] == "Administrative County" | uk.map$TYPE_2[i] == "Metropolitan County" |
+       uk.map$TYPE_2[i] == "County" | uk.map$TYPE_2[i] == "Metropolitan Borough (city)") {
+        match <- grep(uk.map$NAME_2[i], districts$CeremonialCounty)
+        for(j in match) if(is.na(districts$id[j]) ) districts$id[j] <- uk.map$ID_2[i]
+    } else {
+        match <- match(uk.map$NAME_2[i], districts$Name)
+        districts$id[match] <- uk.map$ID_2[i]
+    }
+}
+
+for(i in 1:nrow(districts) ) {
+    match <- match(districts$Name[i], data$Area)
+    if(is.na(match) ) match <- grep(districts$Name[i], data$Area)
+    districts$Leave[i]  <- data$Leave[match]
+    districts$Remain[i] <- data$Remain[match]
+    districts$Valid[i]  <- data$Valid_Votes[match]
+}
+
+england <- with(districts, data.frame(Name   = uk.map@data$NAME_2[wEngland],
+                                      Leave  = tapply(Leave, id, sum, na.rm = TRUE),
+                                      Remain = tapply(Remain, id, sum, na.rm = TRUE),
+                                      Valid  = tapply(Valid, id, sum, na.rm = TRUE),
+                                      id     = uk.map@data$ID_2[wEngland]) )
+```
+
+Though 11 administrative areas have been assigned to Northern Island by the GADM, the Electoral Commision relays only one overall set of results.
+```{r Match Information for Ireland, results = 'asis', message = FALSE, warning = FALSE}
+wIreland <- which(uk.map@data$NAME_1 == "Northern Ireland")
+ireland <- with(data, data.frame(Name   = uk.map@data$NAME_2[wIreland],
+                                 Leave  = rep(Leave[grep("N",Region_Code)], each = length(wIreland) ),
+                                 Remain = rep(Remain[grep("N",Region_Code)], each = length(wIreland) ),
+                                 Valid  = rep(Valid_Votes[grep("N",Region_Code)], each = length(wIreland) ),
+                                 id     = uk.map@data$ID_2[wIreland]) )
+```
+
+For Scotland, it was possible to perform one-to-one matching between the Electoral Commission data and the GADM administrative areas.
+```{r Match Information for Scotland, results = 'asis', message = FALSE, warning = FALSE}
+scotland <- with(data, data.frame(Name   = Area[grep("S",Region_Code)], 
+                                  Leave  = Leave[grep("S",Region_Code)], 
+                                  Remain = Remain[grep("S",Region_Code)], 
+                                  Valid  = Valid_Votes[grep("S",Region_Code)],
+                                  id     = rep(NA,length(grep("S",Region_Code) ) ) ) )
+
+for(i in 1:nrow(scotland) ) {
+    match <- match(scotland$Name[i],uk.map@data$NAME_2)
+    scotland$id[i] <- uk.map@data$ID_2[match]
+}
+```
+
+The same is true for Wales.
+```{r Match Information for Wales, results = 'asis', message = FALSE, warning = FALSE}
+wales <- with(data, data.frame(Name   = Area[grep("W",Region_Code)], 
+                               Leave  = Leave[grep("W",Region_Code)], 
+                               Remain = Remain[grep("W",Region_Code)], 
+                               Valid  = Valid_Votes[grep("W",Region_Code)],
+                               id     = length(grep("W",Region_Code) ) ) )
+
+for(i in 1:nrow(wales) ) {
+    match <- match(wales$Name[i],uk.map@data$NAME_2)
+    wales$id[i] <- uk.map@data$ID_2[match]
+}
+```
+
+For display purposes, a vector of longitudes and latitudes for major cities in the UK is created.
+```{r Location Major Cities, message = FALSE}
+cities.name <- c("Birmingham, UK", "London, UK", "Manchester, UK", "Newcastle, UK", 
+                 "Belfast, UK", "Aberdeen, UK", "Edinburgh, UK", "Cardiff, UK")
+cities.coordinates <- geocode(cities.name, messaging = FALSE)
+cities.lon <- cities.coordinates$lon
+cities.lat <- cities.coordinates$lat
+```
+
+Finally, the map is produced.
+```{r Map, message = FALSE, fig.height = 20, fig.asp = 1}
+uk <- rbind(england, ireland, scotland, wales)
+uk$pct_Leave  <- 100*uk$Leave/uk$Valid
+uk$pct_Remain <- 100*uk$Remain/uk$Valid
+
+uk.points <- fortify(uk.map, region = "ID_2")
+uk$id <- as.character(uk$id)
+uk.plot <- left_join(uk.points,uk)
+
+map <- ggplot() + 
+       geom_polygon(data = uk.plot, aes(x = long, y = lat, group = group, fill = pct_Leave), 
+                    color = "black", size = 0.1) +
+       scale_fill_distiller(palette = "Spectral", breaks = pretty_breaks(n = 8) ) +
+       guides(fill = guide_legend(reverse = TRUE) ) +
+       labs(fill = "Leave (%)") +
+       theme_nothing(legend = TRUE) + 
+       xlim(range(uk.plot$long) ) + ylim(range(uk.plot$lat) ) +
+       coord_map()
+
+map <- map + 
+       geom_point(aes(x = cities.lon, y = cities.lat), color = "black", size = 3, shape = 21) +
+       geom_text(aes(x = cities.lon, y = cities.lat, label = gsub(", UK", "", cities.name) ), 
+                 hjust = 0.5, vjust = -1.5, colour = "black", size = 3)
+
+plot(map)
+```
+
+
+```{r Reset Options, echo = FALSE}
+options(op)
+```
